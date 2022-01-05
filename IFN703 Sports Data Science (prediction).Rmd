@@ -1,0 +1,2287 @@
+---
+title: "IFN703 Sports Data Science"
+author: "Ying Wei (Wilson) Hung"
+date: "02/10/2021"
+output: html_document
+---
+
+```{r}
+#library
+library(tidyverse)
+library(broom)
+library(DHARMa)
+```
+
+```{r load data}
+#import data
+df_final <- read_csv("baseball_data_cleaned.csv")
+df_MLB <- read_csv("baseball_data_MLB.csv")
+df_NPB <- read_csv("baseball_data_NPB.csv")
+```
+
+```{r clean data}
+df_final %>%
+  select (-c(`player in NPB`)) 
+```
+
+```{r}
+colnames(df_final)
+```
+
+```{r drop missing values}
+df_final <- na.omit(df_final)
+```
+
+# (BA) Fit linear model
+
+```{r fit linear regression model}
+BA_npb_lm <-lm(data=df_final, BA_NPB ~ AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB)
+
+summary(BA_npb_lm)
+```
+
+```{r check the homogeneous of error}
+fortify_linear <-fortify(BA_npb_lm)
+
+ggplot(data=fortify_linear,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r check the normality of error}
+ggplot(data=fortify_linear, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+The r-squred value is really bad, therefore we need to try ploynomials model
+
+# Quadratic linear model
+
+```{r quadratic model}
+BA_npb_quadratic <-lm(data= df_final, BA_NPB~ poly(AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB, 2, raw=T))
+summary(BA_npb_quadratic)
+```
+
+```{r}
+fortify_quadratic <-fortify(BA_npb_quadratic)
+
+ggplot(data=fortify_quadratic,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+The residuals are not homogeneous.
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_quadratic, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+The residuals are not normally distributed. R-squared are even worse than the first linear model. We should try other model such as lasso or ridge regression model.
+
+Purpose of using ridge and lasso: Ridge and Lasso regression are some of the simple techniques to *reduce **model complexity***and ***prevent over-fitting*** which may result from simple linear regression.
+
+To perform lasso regression, we'll use functions from the glmnet package. This package requires the response variable to be a vector and the set of predictor variables to be of the class data.matrix.
+
+# Lasso regression model (L1)
+
+```{r}
+#install.packages("glmnet")
+library(glmnet)
+```
+
+```{r}
+#response variable 
+y <- df_final$BA_NPB
+
+#define matrix of predictor variables
+x <- data.matrix(df_final[, c("G_MLB", "PA_MLB", "AB_MLB", "R_MLB", "H_MLB" ,
+  "2B_MLB", "3B_MLB", "HR_MLB","RBI_MLB", "SB_MLB", "CS_MLB", "BB_MLB", 
+  "SO_MLB", "BA_MLB", "OBP_MLB", "SLG_MLB", "OPS_MLB","TB_MLB", "GDP_MLB",
+  "HBP_MLB", "SH_MLB", "SF_MLB" , "IBB_MLB", "HitperABMLB", "TwoBaseHitABMLB",
+  "ThreeBaseHitABMLB","HRperABMLB", "StolenBasePercentageMLB",
+  "BaseOnBallPercentageMLB","StrikeoutPercentageMLB")])
+```
+
+Next, we'll use the glmnet() function to fit the lasso regression model and specify alpha=1.
+
+Note that setting alpha equal to 0 is equivalent to using ridge regression and setting alpha to some value between 0 and 1 is equivalent to using an elastic net.
+
+To determine what value to use for lambda, we'll perform k-fold cross-validation and identify the lambda value that **produces the lowest test mean squared error (MSE).**
+
+Note that the function cv.glmnet() automatically performs k-fold cross validation using k = 10 folds.
+
+```{r}
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model) 
+```
+
+```{r}
+#lamda value
+best_lambda
+```
+
+The lambda value that minimizes the test MSE turns out to be 0.005218301.
+
+Lastly, we can analyze the final model produced by the optimal lambda value. We can use the following code to obtain the coefficient estimates for this model:
+
+```{r}
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+No coefficients are shown for the predictors because the lasso regression shrunk the coefficient all the way to zero. This means it was completely dropped from the model because it wasn't influential enough.
+
+Note that this is a key difference between ridge regression and lasso regression. Ridge regression shrinks all coefficients towards zero, but lasso regression has the potential to remove predictors from the model by shrinking the coefficients completely to zero.
+
+Let's do evaluation by using r-squared
+
+```{r}
+#use fitted best model to make predictions
+y_predicted <- predict(best_model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+```
+
+```{r}
+sst
+```
+
+```{r}
+sse
+```
+
+The r-squared indicates that the model doesn't explain the data well. Based on the poor results from linear models, polynomials model, and lasso regression model, we can conclude that it is hard to predict batting average in NPB by using the MLB data.
+
+Now, let's try to predict the OBP in NPB.
+
+# (OBP) Fit linear model 
+
+```{r}
+OBP_npb_lm <-lm(data=df_final, OBP_NPB ~ AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB)
+
+summary(OBP_npb_lm)
+```
+
+Let's see the homogeneity and normality of the residuals.
+
+```{r}
+fortify_linear_OBP <-fortify(OBP_npb_lm)
+
+ggplot(data=fortify_linear_OBP,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_linear_OBP, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, the residuals are not homogeneous and normally distributed. Plus, the r-squared value is really poor. Therefore, we should try another quadratic model.
+
+# Quadratic Model for OBP
+
+```{r}
+OBP_npb_quadratic <-lm(data= df_final, OBP_NPB~ poly(AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB, 2, raw=T))
+summary(OBP_npb_quadratic)
+```
+
+Let's see the homogeneity and normality of the residuals.
+
+```{r}
+fortify_quadratic_OBP <-fortify(OBP_npb_quadratic)
+
+ggplot(data=fortify_quadratic_OBP,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_quadratic_OBP, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, we can see that the residuals are not homogeneous and normal. Moreover, the r-squared score is worse than the linear model. Now, let's try lasso regression.
+
+# Lasso regression for OBP
+
+```{r}
+#response variable 
+y <- df_final$OBP_NPB
+
+#define matrix of predictor variables
+x <- data.matrix(df_final[, c("G_MLB", "PA_MLB", "AB_MLB", "R_MLB", "H_MLB" ,
+  "2B_MLB", "3B_MLB", "HR_MLB","RBI_MLB", "SB_MLB", "CS_MLB", "BB_MLB", 
+  "SO_MLB", "BA_MLB", "OBP_MLB", "SLG_MLB", "OPS_MLB","TB_MLB", "GDP_MLB",
+  "HBP_MLB", "SH_MLB", "SF_MLB" , "IBB_MLB", "HitperABMLB", "TwoBaseHitABMLB",
+  "ThreeBaseHitABMLB","HRperABMLB", "StolenBasePercentageMLB",
+  "BaseOnBallPercentageMLB","StrikeoutPercentageMLB")])
+```
+
+```{r}
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model) 
+```
+
+```{r}
+#lamda value
+best_lambda
+```
+
+The best lambda value is around 0.0061
+
+```{r}
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+No coefficients are shown for the predictors because the lasso regression shrunk the coefficient all the way to zero. This means it was completely dropped from the model because it wasn't influential enough.
+
+it only appears that the Base on Ball percentage are important to predict the outcome.
+
+Note that this is a key difference between ridge regression and lasso regression. Ridge regression shrinks all coefficients towards zero, but lasso regression has the potential to remove predictors from the model by shrinking the coefficients completely to zero.
+
+Let's do evaluation by using r-squared
+
+```{r}
+#use fitted best model to make predictions
+y_predicted <- predict(best_model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+```
+
+The R square is really poor. Therefore, this indicates that the model still does not fit the data well. The MLB data is not suitable for doing prediction for NPB OBP.
+
+# (SLG) Fit linear model 
+
+```{r}
+SLG_npb_lm <-lm(data=df_final, SLG_NPB ~ AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB)
+
+summary(SLG_npb_lm)
+```
+
+Let's see the homogeneity and normality of the residuals.
+
+```{r}
+fortify_linear_SLG <-fortify(SLG_npb_lm)
+
+ggplot(data=fortify_linear_SLG,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+ggplot(data=fortify_linear_SLG, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, the residuals are not homogeneous and normally distributed. Plus, the r-squared value is really poor. Therefore, we should try another quadratic model.
+
+# Quadratic Model for SLG
+
+```{r}
+SLG_npb_quadratic <-lm(data= df_final, SLG_NPB~ poly(AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB, 2, raw=T))
+summary(SLG_npb_quadratic)
+```
+
+```{r}
+fortify_quadratic_SLG <-fortify(SLG_npb_quadratic)
+
+ggplot(data=fortify_quadratic_OBP,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_quadratic_SLG, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, we can see that the residuals are not homogeneous and normal. Moreover, the r-squared score is worse than the linear model. Now, let's try lasso regression.
+
+# Lasso regression for SLG
+
+```{r}
+#response variable 
+y <- df_final$SLG_NPB
+
+#define matrix of predictor variables
+x <- data.matrix(df_final[, c("G_MLB", "PA_MLB", "AB_MLB", "R_MLB", "H_MLB" ,
+  "2B_MLB", "3B_MLB", "HR_MLB","RBI_MLB", "SB_MLB", "CS_MLB", "BB_MLB", 
+  "SO_MLB", "BA_MLB", "OBP_MLB", "SLG_MLB", "OPS_MLB","TB_MLB", "GDP_MLB",
+  "HBP_MLB", "SH_MLB", "SF_MLB" , "IBB_MLB", "HitperABMLB", "TwoBaseHitABMLB",
+  "ThreeBaseHitABMLB","HRperABMLB", "StolenBasePercentageMLB",
+  "BaseOnBallPercentageMLB","StrikeoutPercentageMLB")])
+```
+
+```{r}
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model) 
+```
+
+```{r}
+#lamda value
+best_lambda
+```
+
+The best lambda value is around 0.01.
+
+```{r}
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+it only appears that the Strikeout percentage are important to predict the outcome.
+
+Note that this is a key difference between ridge regression and lasso regression. Ridge regression shrinks all coefficients towards zero, but lasso regression has the potential to remove predictors from the model by shrinking the coefficients completely to zero.
+
+Let's do evaluation by using r-squared
+
+```{r}
+#use fitted best model to make predictions
+y_predicted <- predict(best_model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+```
+
+The r-squared is really bad, we can said that the better model to predict the SLG_NPB is the linear model even though the results are poor either. It is not suitable for using MLB data to predict the NPB SLG.
+
+# (OPS) Fit linear model
+
+```{r}
+OPS_npb_lm <-lm(data=df_final, OPS_NPB ~ AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB)
+
+summary(OPS_npb_lm)
+```
+
+Let's see the homogeneity and normality of the residuals.
+
+```{r}
+fortify_linear_OPS <-fortify(OPS_npb_lm)
+
+ggplot(data=fortify_linear_OPS,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+ggplot(data=fortify_linear_OPS, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, the residuals are not homogeneous and normally distributed. Plus, the r-squared value is really poor. Therefore, we should try another quadratic model.
+
+# Quadratic Model for OPS
+
+```{r}
+OPS_npb_quadratic <-lm(data= df_final, OPS_NPB~ poly(AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB, 2, raw=T))
+summary(OPS_npb_quadratic)
+```
+
+```{r}
+fortify_quadratic_OPS <-fortify(OPS_npb_quadratic)
+
+ggplot(data=fortify_quadratic_OPS,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_quadratic_OPS, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, we can see that the residuals are not homogeneous and normal. Moreover, the r-squared score is worse than the linear model. Now, let's try lasso regression.
+
+# Lasso regression for OPS
+
+```{r}
+#response variable 
+y <- df_final$OPS_NPB
+
+#define matrix of predictor variables
+x <- data.matrix(df_final[, c("G_MLB", "PA_MLB", "AB_MLB", "R_MLB", "H_MLB" ,
+  "2B_MLB", "3B_MLB", "HR_MLB","RBI_MLB", "SB_MLB", "CS_MLB", "BB_MLB", 
+  "SO_MLB", "BA_MLB", "OBP_MLB", "SLG_MLB", "OPS_MLB","TB_MLB", "GDP_MLB",
+  "HBP_MLB", "SH_MLB", "SF_MLB" , "IBB_MLB", "HitperABMLB", "TwoBaseHitABMLB",
+  "ThreeBaseHitABMLB","HRperABMLB", "StolenBasePercentageMLB",
+  "BaseOnBallPercentageMLB","StrikeoutPercentageMLB")])
+```
+
+```{r}
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model) 
+```
+
+```{r}
+#lamda value
+best_lambda
+```
+
+The best lambda value is close to 0.013.
+
+```{r}
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+It only appears that the Games are important to predict the outcome.
+
+Note that this is a key difference between ridge regression and lasso regression. Ridge regression shrinks all coefficients towards zero, but lasso regression has the potential to remove predictors from the model by shrinking the coefficients completely to zero.
+
+Let's do evaluation by using r-squared
+
+```{r}
+#use fitted best model to make predictions
+y_predicted <- predict(best_model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+```
+
+The r-squared is really bad, we can said that the better model to predict the SLG_NPB is the linear model even though the results are poor either. It is not suitable for using MLB data to predict the NPB OPS.
+
+# (RBI) Fit linear model 
+
+```{r}
+RBI_npb_lm <-lm(data=df_final, RBI_NPB ~ AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB)
+
+summary(RBI_npb_lm)
+```
+
+```{r}
+fortify_linear_RBI <-fortify(RBI_npb_lm)
+
+ggplot(data=fortify_linear_RBI,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+ggplot(data=fortify_linear_RBI, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, the residuals are not homogeneous and normally distributed. Plus, the r-squared value is really poor. Therefore, we should try another quadratic model.
+
+# Quadratic Model for RBI
+
+```{r}
+RBI_npb_quadratic <-lm(data= df_final, RBI_NPB~ poly(AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB, 2, raw=T))
+summary(RBI_npb_quadratic)
+```
+
+```{r}
+fortify_quadratic_RBI <-fortify(RBI_npb_quadratic)
+
+ggplot(data=fortify_quadratic_RBI,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_quadratic_RBI, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, we can see that the residuals are not homogeneous and normal. Moreover, the r-squared score is worse than the linear model. Now, let's try lasso regression.
+
+# Lasso regression for RBI
+
+```{r}
+#response variable 
+y <- df_final$RBI_NPB
+
+#define matrix of predictor variables
+x <- data.matrix(df_final[, c("G_MLB", "PA_MLB", "AB_MLB", "R_MLB", "H_MLB" ,
+  "2B_MLB", "3B_MLB", "HR_MLB","RBI_MLB", "SB_MLB", "CS_MLB", "BB_MLB", 
+  "SO_MLB", "BA_MLB", "OBP_MLB", "SLG_MLB", "OPS_MLB","TB_MLB", "GDP_MLB",
+  "HBP_MLB", "SH_MLB", "SF_MLB" , "IBB_MLB", "HitperABMLB", "TwoBaseHitABMLB",
+  "ThreeBaseHitABMLB","HRperABMLB", "StolenBasePercentageMLB",
+  "BaseOnBallPercentageMLB","StrikeoutPercentageMLB")])
+```
+
+```{r}
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model) 
+```
+
+```{r}
+#lamda value
+best_lambda
+```
+
+```{r}
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+It only appears that the Base on Ball percentage is important to predict the outcome.
+
+Note that this is a key difference between ridge regression and lasso regression. Ridge regression shrinks all coefficients towards zero, but lasso regression has the potential to remove predictors from the model by shrinking the coefficients completely to zero.
+
+Let's do evaluation by using r-squared
+
+```{r}
+#use fitted best model to make predictions
+y_predicted <- predict(best_model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+```
+
+The r-squared is really bad, we can said that the better model to predict the RBI_NPB is the linear model even though the results are poor either. It is not suitable for using MLB data to predict the NPB RBI.
+
+# (SB percentage) Fit linear model
+
+```{r}
+SB_npb_lm <-lm(data=df_final, StolenBasePercentageNPB ~ AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB)
+
+summary(SB_npb_lm)
+```
+
+```{r}
+fortify_linear_SB <-fortify(SB_npb_lm)
+
+ggplot(data=fortify_linear_SB,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+ggplot(data=fortify_linear_SB, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Apparently, the residuals are not homogeneous and normally distributed. Let's try quadratic model.
+
+# Quadratic model for SB percentage
+
+```{r}
+SB_npb_quadratic <-lm(data= df_final, StolenBasePercentageNPB ~ poly(AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB, 2, raw=T))
+summary(SB_npb_quadratic)
+```
+
+```{r}
+fortify_quadratic_SB <-fortify(SB_npb_quadratic)
+
+ggplot(data=fortify_quadratic_SB,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_quadratic_SB, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, we can see that the residuals are not homogeneous and normal. Moreover, the r-squared score is worse than the linear model. Now, let's try lasso regression.
+
+# Lasso Regression mode for SB percentage
+
+```{r}
+#response variable 
+y <- df_final$StolenBasePercentageNPB
+
+#define matrix of predictor variables
+x <- data.matrix(df_final[, c("G_MLB", "PA_MLB", "AB_MLB", "R_MLB", "H_MLB" ,
+  "2B_MLB", "3B_MLB", "HR_MLB","RBI_MLB", "SB_MLB", "CS_MLB", "BB_MLB", 
+  "SO_MLB", "BA_MLB", "OBP_MLB", "SLG_MLB", "OPS_MLB","TB_MLB", "GDP_MLB",
+  "HBP_MLB", "SH_MLB", "SF_MLB" , "IBB_MLB", "HitperABMLB", "TwoBaseHitABMLB",
+  "ThreeBaseHitABMLB","HRperABMLB", "StolenBasePercentageMLB",
+  "BaseOnBallPercentageMLB","StrikeoutPercentageMLB")])
+```
+
+```{r}
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model) 
+```
+
+```{r}
+#lamda value
+best_lambda
+```
+
+The best lambda is around 0.0006
+
+```{r}
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+It only appears that the 3B per AB is important to predict the outcome.\
+Because batter need to have great speed to produce 3B hit, so it is quite reasonable.
+
+Note that this is a key difference between ridge regression and lasso regression. Ridge regression shrinks all coefficients towards zero, but lasso regression has the potential to remove predictors from the model by shrinking the coefficients completely to zero.
+
+Let's do evaluation by using r-squared
+
+```{r}
+#use fitted best model to make predictions
+y_predicted <- predict(best_model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+```
+
+The r-squared is really bad, we can said that the better model to predict the RBI_NPB is the linear model even though the results are poor either. It is not suitable for using MLB data to predict the NPB SB percentage.
+
+# (BB Percentage) Fit linear model
+
+```{r}
+BB_npb_lm <-lm(data=df_final, BaseOnBallPercentageNPB ~ AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB)
+
+summary(BB_npb_lm)
+```
+
+```{r}
+fortify_linear_BB <-fortify(BB_npb_lm)
+
+ggplot(data=fortify_linear_BB,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+ggplot(data=fortify_linear_BB, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, the residuals are not homogeneous but normally distributed. Plus, the r-squared value is poor. Therefore, we should try another quadratic model.
+
+# Quadratic model for Base on Ball percentage
+
+```{r}
+BB_npb_quadratic <-lm(data= df_final, BaseOnBallPercentageNPB ~ poly(AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB, 2, raw=T))
+summary(BB_npb_quadratic)
+```
+
+```{r}
+fortify_quadratic_BB <-fortify(BB_npb_quadratic)
+
+ggplot(data=fortify_quadratic_BB,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_quadratic_BB, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, we can see that the residuals are not homogeneous and normal. Moreover, the r-squared score is worse than the linear model. Now, let's try lasso regression.
+
+# Lasso regression for BB percentage
+
+```{r}
+#response variable 
+y <- df_final$BaseOnBallPercentageNPB
+
+#define matrix of predictor variables
+x <- data.matrix(df_final[, c("G_MLB", "PA_MLB", "AB_MLB", "R_MLB", "H_MLB" ,
+  "2B_MLB", "3B_MLB", "HR_MLB","RBI_MLB", "SB_MLB", "CS_MLB", "BB_MLB", 
+  "SO_MLB", "BA_MLB", "OBP_MLB", "SLG_MLB", "OPS_MLB","TB_MLB", "GDP_MLB",
+  "HBP_MLB", "SH_MLB", "SF_MLB" , "IBB_MLB", "HitperABMLB", "TwoBaseHitABMLB",
+  "ThreeBaseHitABMLB","HRperABMLB", "StolenBasePercentageMLB",
+  "BaseOnBallPercentageMLB","StrikeoutPercentageMLB")])
+```
+
+```{r}
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model) 
+```
+
+```{r}
+#lamda value
+best_lambda
+```
+
+```{r}
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+It appears that the hit, 2B, CS, BB, HBP, OBP, SH, IBB, 2B per AB, 3B per AB, HR per AB, Base on ball percentage, and Strikeout percentage are important to predict the outcome.
+
+Note that this is a key difference between ridge regression and lasso regression. Ridge regression shrinks all coefficients towards zero, but lasso regression has the potential to remove predictors from the model by shrinking the coefficients completely to zero.
+
+Let's do evaluation by using r-squared
+
+```{r}
+#use fitted best model to make predictions
+y_predicted <- predict(best_model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+```
+
+The r-squared is poor but it explains more variability than the linear and quadratic model.
+
+We cannot said that the lasso model is the best but the better model.
+
+# (Strikeout Percentage) Fit the linear model
+
+```{r}
+K_npb_lm <-lm(data=df_final, StrikeoutPercentageNPB ~ AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB)
+
+summary(K_npb_lm)
+```
+
+```{r}
+fortify_linear_K <-fortify(K_npb_lm)
+
+ggplot(data=fortify_linear_SB,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+ggplot(data=fortify_linear_K, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, the residuals are not homogeneous but normally distributed. Plus, the r-squared value is poor. Therefore, we should try another quadratic model.
+
+# Quadratic model for K percentage
+
+```{r}
+K_npb_quadratic <-lm(data= df_final, StrikeoutPercentageNPB ~ poly(AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB, 2, raw=T))
+summary(K_npb_quadratic)
+```
+
+```{r}
+fortify_quadratic_K <-fortify(K_npb_quadratic)
+
+ggplot(data=fortify_quadratic_BB,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_quadratic_K, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, we can see that the residuals are not homogeneous and normal. Moreover, the r-squared score is worse than the linear model. Now, let's try lasso regression.
+
+# Lasso regression for K percentage
+
+```{r}
+#response variable 
+y <- df_final$StrikeoutPercentageNPB
+
+#define matrix of predictor variables
+x <- data.matrix(df_final[, c("G_MLB", "PA_MLB", "AB_MLB", "R_MLB", "H_MLB" ,
+  "2B_MLB", "3B_MLB", "HR_MLB","RBI_MLB", "SB_MLB", "CS_MLB", "BB_MLB", 
+  "SO_MLB", "BA_MLB", "OBP_MLB", "SLG_MLB", "OPS_MLB","TB_MLB", "GDP_MLB",
+  "HBP_MLB", "SH_MLB", "SF_MLB" , "IBB_MLB", "HitperABMLB", "TwoBaseHitABMLB",
+  "ThreeBaseHitABMLB","HRperABMLB", "StolenBasePercentageMLB",
+  "BaseOnBallPercentageMLB","StrikeoutPercentageMLB")])
+```
+
+```{r}
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model)
+```
+
+```{r}
+#lamda value
+best_lambda
+```
+
+```{r}
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+It appears that the SO, OPS, GDP, SH, 3B per AB, HR per AB, Base on ball percentage, and Strikeout percentage are important to predict the outcome.
+
+Note that this is a key difference between ridge regression and lasso regression. Ridge regression shrinks all coefficients towards zero, but lasso regression has the potential to remove predictors from the model by shrinking the coefficients completely to zero.
+
+Let's do evaluation by using r-squared
+
+```{r}
+#use fitted best model to make predictions
+y_predicted <- predict(best_model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+```
+
+The r-squared value is better than the linear model, meaning that lasso explain more variability than linear model. We cannot said lasso model is the best but better model to do the prediction.
+
+# (2B per AB MLB) Fit linear model
+
+```{r}
+TwoBase_npb_lm <-lm(data=df_final, TwoBaseHitABNPB ~ AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB)
+
+summary(TwoBase_npb_lm)
+```
+
+```{r}
+fortify_linear_2b <-fortify(TwoBase_npb_lm)
+
+ggplot(data=fortify_linear_2b,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+ggplot(data=fortify_linear_2b, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, the residuals are not homogeneous and normally distributed. Plus, the r-squared value is poor. Therefore, we should try another quadratic model.
+
+# Quadratic model for 2B per AB
+
+```{r}
+twoB_npb_quadratic <-lm(data= df_final, TwoBaseHitABNPB ~ poly(AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB, 2, raw=T))
+summary(twoB_npb_quadratic)
+```
+
+```{r}
+fortify_quadratic_2B <-fortify(twoB_npb_quadratic)
+
+ggplot(data=fortify_quadratic_BB,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_quadratic_2B, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, we can see that the residuals are not homogeneous and normal. Moreover, the r-squared score is worse than the linear model. Now, let's try lasso regression.
+
+# Lasso regression for 2B hit AB
+
+```{r}
+#response variable 
+y <- df_final$TwoBaseHitABNPB
+
+#define matrix of predictor variables
+x <- data.matrix(df_final[, c("G_MLB", "PA_MLB", "AB_MLB", "R_MLB", "H_MLB" ,
+  "2B_MLB", "3B_MLB", "HR_MLB","RBI_MLB", "SB_MLB", "CS_MLB", "BB_MLB", 
+  "SO_MLB", "BA_MLB", "OBP_MLB", "SLG_MLB", "OPS_MLB","TB_MLB", "GDP_MLB",
+  "HBP_MLB", "SH_MLB", "SF_MLB" , "IBB_MLB", "HitperABMLB", "TwoBaseHitABMLB",
+  "ThreeBaseHitABMLB","HRperABMLB", "StolenBasePercentageMLB",
+  "BaseOnBallPercentageMLB","StrikeoutPercentageMLB")])
+```
+
+```{r}
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model)
+```
+
+```{r}
+#lamda value
+best_lambda
+```
+
+```{r}
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+It only appears that the 2B per AB is important to predict the outcome.
+
+Note that this is a key difference between ridge regression and lasso regression. Ridge regression shrinks all coefficients towards zero, but lasso regression has the potential to remove predictors from the model by shrinking the coefficients completely to zero.
+
+Let's do evaluation by using r-squared
+
+```{r}
+#use fitted best model to make predictions
+y_predicted <- predict(best_model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+```
+
+The r-squared is really bad, we can said that the better model to predict the Two Base Hit per AB NPB is the linear model even though the results are poor either. It is not suitable for using MLB data to predict the NPB one.
+
+# (3B per AB) Fit linear model
+
+```{r}
+ThreeBase_npb_lm <-lm(data=df_final, ThreeBaseHitABNPB ~ AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB)
+
+summary(ThreeBase_npb_lm)
+```
+
+```{r}
+fortify_linear_3b <-fortify(ThreeBase_npb_lm)
+
+ggplot(data=fortify_linear_2b,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+ggplot(data=fortify_linear_3b, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots above, the residuals are not homogeneous and normally distributed. We will try quadratic model.
+
+# Quadratic model for 3B per AB
+
+```{r}
+threeB_npb_quadratic <-lm(data= df_final, ThreeBaseHitABNPB ~ poly(AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB, 2, raw=T))
+summary(threeB_npb_quadratic)
+```
+
+```{r}
+fortify_quadratic_3B <-fortify(threeB_npb_quadratic)
+
+ggplot(data=fortify_quadratic_BB,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_quadratic_3B, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+The residuals are not homogeneous and normally distributed as well. Let's try lasso regression.
+
+# Lasso regression for 3B per AB
+
+```{r}
+#response variable 
+y <- df_final$ThreeBaseHitABNPB
+
+#define matrix of predictor variables
+x <- data.matrix(df_final[, c("G_MLB", "PA_MLB", "AB_MLB", "R_MLB", "H_MLB" ,
+  "2B_MLB", "3B_MLB", "HR_MLB","RBI_MLB", "SB_MLB", "CS_MLB", "BB_MLB", 
+  "SO_MLB", "BA_MLB", "OBP_MLB", "SLG_MLB", "OPS_MLB","TB_MLB", "GDP_MLB",
+  "HBP_MLB", "SH_MLB", "SF_MLB" , "IBB_MLB", "HitperABMLB", "TwoBaseHitABMLB",
+  "ThreeBaseHitABMLB","HRperABMLB", "StolenBasePercentageMLB",
+  "BaseOnBallPercentageMLB","StrikeoutPercentageMLB")])
+```
+
+```{r}
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model)
+```
+
+```{r}
+#lamda value
+best_lambda
+```
+
+```{r}
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+It appears that the SB, BA, SF,three base hit per AB, HR per AB, stolen base percentage, base on ball percentage, and strikeout percentage are important to predict the outcome.
+
+Note that this is a key difference between ridge regression and lasso regression. Ridge regression shrinks all coefficients towards zero, but lasso regression has the potential to remove predictors from the model by shrinking the coefficients completely to zero.
+
+Let's do evaluation by using r-squared
+
+```{r}
+#use fitted best model to make predictions
+y_predicted <- predict(best_model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+```
+
+The r-squared is really bad, we can said that the better model to predict the Two Base Hit per AB NPB is the linear model even though the results are poor either. It is not suitable for using MLB data to predict the NPB one.
+
+# (HR per AB) Fit linear model
+
+```{r}
+HR_npb_lm <-lm(data=df_final, HRperABNPB ~ AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB)
+
+summary(HR_npb_lm)
+```
+
+```{r}
+fortify_linear_hr <-fortify(HR_npb_lm)
+
+ggplot(data=fortify_linear_hr,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+ggplot(data=fortify_linear_hr, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+The residuals are homogeneous and normally distributed, which follow the assumption of the linear regression.
+
+Let's try lasso regression
+
+# Lasso regression for HR per AB
+
+```{r}
+#response variable 
+y <- df_final$HRperABNPB
+
+#define matrix of predictor variables
+x <- data.matrix(df_final[, c("G_MLB", "PA_MLB", "AB_MLB", "R_MLB", "H_MLB" ,
+  "2B_MLB", "3B_MLB", "HR_MLB","RBI_MLB", "SB_MLB", "CS_MLB", "BB_MLB", 
+  "SO_MLB", "BA_MLB", "OBP_MLB", "SLG_MLB", "OPS_MLB","TB_MLB", "GDP_MLB",
+  "HBP_MLB", "SH_MLB", "SF_MLB" , "IBB_MLB", "HitperABMLB", "TwoBaseHitABMLB",
+  "ThreeBaseHitABMLB","HRperABMLB", "StolenBasePercentageMLB",
+  "BaseOnBallPercentageMLB","StrikeoutPercentageMLB")])
+```
+
+```{r}
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model)
+```
+
+```{r}
+#lamda value
+best_lambda
+```
+
+```{r}
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+It appears that the SB, BA, SF,three base hit per AB, HR per AB, stolen base percentage, base on ball percentage, and strikeout percentage are important to predict the outcome.
+
+Note that this is a key difference between ridge regression and lasso regression. Ridge regression shrinks all coefficients towards zero, but lasso regression has the potential to remove predictors from the model by shrinking the coefficients completely to zero.
+
+Let's do evaluation by using r-squared
+
+```{r}
+#use fitted best model to make predictions
+y_predicted <- predict(best_model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+```
+
+The r-squared shows better result in the lasso regression model although the r-squared is still bad.\
+This means that it is hard to predict HR per AB in NPB by using MLB data.
+
+# (Game played) Fit the linear model 
+
+```{r}
+G_npb_lm <-lm(data=df_final, G_NPB ~ AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB)
+
+summary(G_npb_lm)
+```
+
+```{r}
+fortify_linear_g <-fortify(G_npb_lm)
+
+ggplot(data=fortify_linear_g,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+ggplot(data=fortify_linear_g, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, the residuals are not homogeneous and normally distributed. Plus, the r-squared value is poor. Therefore, we should try another quadratic model.
+
+# Quadratic model for game played
+
+```{r}
+g_npb_quadratic <-lm(data= df_final, G_NPB ~ poly(AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB, 2, raw=T))
+summary(g_npb_quadratic)
+```
+
+```{r}
+fortify_quadratic_g <-fortify(g_npb_quadratic)
+
+ggplot(data=fortify_quadratic_g,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_quadratic_g, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, we can see that the residuals are not homogeneous and normal. Moreover, the r-squared score is worse than the linear model. Now, let's try lasso regression.
+
+# Lasso regression for Game Played
+
+```{r}
+#response variable 
+y <- df_final$G_NPB
+
+#define matrix of predictor variables
+x <- data.matrix(df_final[, c("G_MLB", "PA_MLB", "AB_MLB", "R_MLB", "H_MLB" ,
+  "2B_MLB", "3B_MLB", "HR_MLB","RBI_MLB", "SB_MLB", "CS_MLB", "BB_MLB", 
+  "SO_MLB", "BA_MLB", "OBP_MLB", "SLG_MLB", "OPS_MLB","TB_MLB", "GDP_MLB",
+  "HBP_MLB", "SH_MLB", "SF_MLB" , "IBB_MLB", "HitperABMLB", "TwoBaseHitABMLB",
+  "ThreeBaseHitABMLB","HRperABMLB", "StolenBasePercentageMLB",
+  "BaseOnBallPercentageMLB","StrikeoutPercentageMLB")])
+```
+
+```{r}
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model)
+```
+
+```{r}
+#lamda value
+best_lambda
+```
+
+```{r}
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+```{r}
+#use fitted best model to make predictions
+y_predicted <- predict(best_model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+```
+
+The result is really bad for lasso as well. Therefore, we can say that it is hard to predict the Game played in NPB based on the data from MLB.
+
+# (Plate appearance) Fit the linear model
+
+```{r}
+PA_npb_lm <-lm(data=df_final, PA_NPB ~ AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB)
+
+summary(PA_npb_lm)
+```
+
+```{r}
+fortify_linear_pa <-fortify(PA_npb_lm)
+
+ggplot(data=fortify_linear_pa,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+ggplot(data=fortify_linear_pa, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, the residuals are not homogeneous and normally distributed. Plus, the r-squared value is poor. Therefore, we should try another quadratic model.
+
+# Quadratic model for plate appearance
+
+```{r}
+PA_npb_quadratic <-lm(data= df_final, PA_NPB ~ poly(AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB, 2, raw=T))
+summary(PA_npb_quadratic)
+```
+
+```{r}
+fortify_quadratic_pa <-fortify(PA_npb_quadratic)
+
+ggplot(data=fortify_quadratic_pa,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_quadratic_pa, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, we can see that the residuals are not homogeneous and normal. Moreover, the r-squared score is worse than the linear model. Now, let's try lasso regression.
+
+# Lasso regression 
+
+```{r}
+#response variable 
+y <- df_final$PA_NPB
+
+#define matrix of predictor variables
+x <- data.matrix(df_final[, c("G_MLB", "PA_MLB", "AB_MLB", "R_MLB", "H_MLB" ,
+  "2B_MLB", "3B_MLB", "HR_MLB","RBI_MLB", "SB_MLB", "CS_MLB", "BB_MLB", 
+  "SO_MLB", "BA_MLB", "OBP_MLB", "SLG_MLB", "OPS_MLB","TB_MLB", "GDP_MLB",
+  "HBP_MLB", "SH_MLB", "SF_MLB" , "IBB_MLB", "HitperABMLB", "TwoBaseHitABMLB",
+  "ThreeBaseHitABMLB","HRperABMLB", "StolenBasePercentageMLB",
+  "BaseOnBallPercentageMLB","StrikeoutPercentageMLB")])
+```
+
+```{r}
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model)
+```
+
+```{r}
+#lamda value
+best_lambda
+```
+
+```{r}
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+```{r}
+#use fitted best model to make predictions
+y_predicted <- predict(best_model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+```
+
+The result is really bad for lasso as well. Therefore, we can say that it is hard to predict the plate appearance in NPB based on the data from MLB.
+
+# (At Bat) Fit the linear model
+
+```{r}
+AB_npb_lm <-lm(data=df_final, AB_NPB ~ AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB)
+
+summary(AB_npb_lm)
+```
+
+```{r}
+fortify_linear_ab <-fortify(AB_npb_lm)
+
+ggplot(data=fortify_linear_ab,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+ggplot(data=fortify_linear_ab, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, the residuals are not homogeneous and normally distributed. Plus, the r-squared value is poor. Therefore, we should try another quadratic model.
+
+# Quadratic model for AB
+
+```{r}
+AB_npb_quadratic <-lm(data= df_final, AB_NPB ~ poly(AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB, 2, raw=T))
+summary(AB_npb_quadratic)
+```
+
+```{r}
+fortify_quadratic_ab <-fortify(AB_npb_quadratic)
+
+ggplot(data=fortify_quadratic_ab,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_quadratic_ab, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, we can see that the residuals are not homogeneous and normal. Moreover, the r-squared score is worse than the linear model. Now, let's try lasso regression.
+
+# Lasso regression for AB
+
+```{r}
+#response variable 
+y <- df_final$AB_NPB
+
+#define matrix of predictor variables
+x <- data.matrix(df_final[, c("G_MLB", "PA_MLB", "AB_MLB", "R_MLB", "H_MLB" ,
+  "2B_MLB", "3B_MLB", "HR_MLB","RBI_MLB", "SB_MLB", "CS_MLB", "BB_MLB", 
+  "SO_MLB", "BA_MLB", "OBP_MLB", "SLG_MLB", "OPS_MLB","TB_MLB", "GDP_MLB",
+  "HBP_MLB", "SH_MLB", "SF_MLB" , "IBB_MLB", "HitperABMLB", "TwoBaseHitABMLB",
+  "ThreeBaseHitABMLB","HRperABMLB", "StolenBasePercentageMLB",
+  "BaseOnBallPercentageMLB","StrikeoutPercentageMLB")])
+```
+
+```{r}
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model)
+```
+
+```{r}
+#lamda value
+best_lambda
+```
+
+```{r}
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+```{r}
+#use fitted best model to make predictions
+y_predicted <- predict(best_model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+```
+
+The result is really bad for lasso as well. Therefore, we can say that it is hard to predict the AB in NPB based on the data from MLB.
+
+# (Run earned) Fit the linear model
+
+```{r}
+R_npb_lm <-lm(data=df_final, R_NPB ~ AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB)
+
+summary(R_npb_lm)
+```
+
+```{r}
+fortify_linear_r <-fortify(R_npb_lm)
+
+ggplot(data=fortify_linear_r,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+ggplot(data=fortify_linear_r, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, the residuals are not homogeneous and normally distributed. Plus, the r-squared value is poor. Therefore, we should try another quadratic model.
+
+# Quadratic model for Run Earned
+
+```{r}
+R_npb_quadratic <-lm(data= df_final, R_NPB ~ poly(AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB, 2, raw=T))
+summary(R_npb_quadratic)
+```
+
+```{r}
+fortify_quadratic_r <-fortify(R_npb_quadratic)
+
+ggplot(data=fortify_quadratic_ab,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_quadratic_r, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, we can see that the residuals are not homogeneous and normal. Moreover, the r-squared score is worse than the linear model. Now, let's try lasso regression.
+
+# Lasso regression for Run Earned
+
+```{r}
+#response variable 
+y <- df_final$R_NPB
+
+#define matrix of predictor variables
+x <- data.matrix(df_final[, c("G_MLB", "PA_MLB", "AB_MLB", "R_MLB", "H_MLB" ,
+  "2B_MLB", "3B_MLB", "HR_MLB","RBI_MLB", "SB_MLB", "CS_MLB", "BB_MLB", 
+  "SO_MLB", "BA_MLB", "OBP_MLB", "SLG_MLB", "OPS_MLB","TB_MLB", "GDP_MLB",
+  "HBP_MLB", "SH_MLB", "SF_MLB" , "IBB_MLB", "HitperABMLB", "TwoBaseHitABMLB",
+  "ThreeBaseHitABMLB","HRperABMLB", "StolenBasePercentageMLB",
+  "BaseOnBallPercentageMLB","StrikeoutPercentageMLB")])
+```
+
+```{r}
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model)
+```
+
+```{r}
+#lamda value
+best_lambda
+```
+
+```{r}
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+```{r}
+#use fitted best model to make predictions
+y_predicted <- predict(best_model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+```
+
+The result is really bad for lasso as well. Therefore, we can say that it is hard to predict the R in NPB based on the data from MLB.
+
+# (Caught Steal) Fit the linear model
+
+```{r}
+CS_npb_lm <-lm(data=df_final, CS_NPB ~ AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB)
+
+summary(CS_npb_lm)
+```
+
+```{r}
+fortify_linear_cs <-fortify(CS_npb_lm)
+
+ggplot(data=fortify_linear_r,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+ggplot(data=fortify_linear_r, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, the residuals are not homogeneous and normally distributed. Plus, the r-squared value is poor. Therefore, we should try another quadratic model.
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_quadratic_r, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+# Quadratic model for CS
+
+```{r}
+CS_npb_quadratic <-lm(data= df_final, CS_NPB ~ poly(AB_MLB + R_MLB + HR_MLB + RBI_MLB +
+                 BA_MLB + 
+                 OBP_MLB + 
+                 SLG_MLB +
+                 OPS_MLB + 
+                 TB_MLB +
+                 SH_MLB + 
+                 SF_MLB +
+                 StolenBasePercentageMLB +
+                 BaseOnBallPercentageMLB +
+                 StrikeoutPercentageMLB, 2, raw=T))
+summary(CS_npb_quadratic)
+```
+
+```{r}
+fortify_quadratic_cs <-fortify(CS_npb_quadratic)
+
+ggplot(data=fortify_quadratic_ab,aes(x=.fitted, y=.resid))+
+  geom_point()+ 
+  theme_bw()+ 
+  xlab("Fitted values")+
+  ylab("Residuals")+ 
+  geom_smooth()
+```
+
+```{r}
+#check the normality of errors
+ggplot(data=fortify_quadratic_cs, aes(sample=.stdresid))+
+  stat_qq(geom="point")+ 
+  geom_abline()+
+  xlab("Theoretical (Z ~ N(0,1))")+
+  ylab("Sample")+ 
+  coord_equal()+ 
+  theme_bw()
+```
+
+Based on the two plots, we can see that the residuals are not homogeneous and normal. Moreover, the r-squared score is worse than the linear model. Now, let's try lasso regression.
+
+# Lasso regression (CS)
+
+```{r}
+#response variable 
+y <- df_final$CS_NPB
+
+#define matrix of predictor variables
+x <- data.matrix(df_final[, c("G_MLB", "PA_MLB", "AB_MLB", "R_MLB", "H_MLB" ,
+  "2B_MLB", "3B_MLB", "HR_MLB","RBI_MLB", "SB_MLB", "CS_MLB", "BB_MLB", 
+  "SO_MLB", "BA_MLB", "OBP_MLB", "SLG_MLB", "OPS_MLB","TB_MLB", "GDP_MLB",
+  "HBP_MLB", "SH_MLB", "SF_MLB" , "IBB_MLB", "HitperABMLB", "TwoBaseHitABMLB",
+  "ThreeBaseHitABMLB","HRperABMLB", "StolenBasePercentageMLB",
+  "BaseOnBallPercentageMLB","StrikeoutPercentageMLB")])
+```
+
+```{r}
+#perform k-fold cross-validation to find optimal lambda value
+cv_model <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(cv_model)
+```
+
+```{r}
+#lamda value
+best_lambda
+```
+
+```{r}
+#find coefficients of best model
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+```{r}
+#use fitted best model to make predictions
+y_predicted <- predict(best_model, s = best_lambda, newx = x)
+
+#find SST and SSE
+sst <- sum((y - mean(y))^2)
+sse <- sum((y_predicted - y)^2)
+
+#find R-Squared
+rsq <- 1 - sse/sst
+rsq
+```
+
+The result is really bad for lasso as well. Therefore, we can say that it is hard to predict the CS in NPB based on the data from MLB.
